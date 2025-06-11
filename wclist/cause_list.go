@@ -173,16 +173,6 @@ func (cl *CauseList) ReadCauseList(file io.Reader, size int64) error {
 			continue // Skip pages that can't be read
 		}
 
-		fmt.Printf("Successfully extracted text from page %d, length: %d\n", i, len(content))
-		if len(content) > 200 {
-			fmt.Printf("First 200 chars: %s...\n", content[:200])
-		} else if len(content) > 0 {
-			fmt.Printf("Page content: %s\n", content)
-		} else {
-			fmt.Printf("Page %d has no text content\n", i)
-			continue
-		}
-
 		// Parse the page content and extract items
 		items := cl.parsePageText(content)
 		cl.Items = append(cl.Items, items...)
@@ -191,49 +181,6 @@ func (cl *CauseList) ReadCauseList(file io.Reader, size int64) error {
 
 	fmt.Printf("Total items extracted: %d\n", len(cl.Items))
 	return nil
-}
-
-// parsePageRows parses the text rows from a page and extracts cause list items
-func (cl *CauseList) parsePageRows(rows pdf.Rows) []CauseListItem {
-	var items []CauseListItem
-
-	// Combine all text from rows into lines
-	var pageLines []string
-	for _, row := range rows {
-		var lineText strings.Builder
-		for _, text := range row.Content {
-			lineText.WriteString(text.S)
-			lineText.WriteString(" ")
-		}
-		line := strings.TrimSpace(lineText.String())
-		if line != "" {
-			pageLines = append(pageLines, line)
-		}
-	}
-
-	// Determine the current section type (objection, forfeiture, exemption)
-	currentSection := cl.detectSectionType(strings.Join(pageLines, " "))
-
-	// Parse table rows based on the section type
-	for _, line := range pageLines {
-		// Skip header lines and section titles
-		if cl.isHeaderLine(line) {
-			continue
-		}
-
-		// Try to parse the line as a table row
-		item := cl.parseTableRow(line, currentSection)
-		if item != nil {
-			items = append(items, item)
-		}
-
-		// Check if section type changes within the page
-		if newSection := cl.detectSectionType(line); newSection != "unknown" {
-			currentSection = newSection
-		}
-	}
-
-	return items
 }
 
 // parsePageText parses plain text from a page and extracts cause list items
