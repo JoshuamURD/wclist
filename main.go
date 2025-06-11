@@ -67,8 +67,8 @@ func main() {
 			OtherPartyNames: []string{"XYZ Corp", "DEF Industries"},
 		},
 		{
-			ClientName:      "Smith Holdings",
-			TenementNumber:  "EPM67890",
+			ClientName:      "FOCUS MINERALS LTD",
+			TenementNumber:  "L 15/474",
 			OtherPartyNames: []string{"Jones Mining", "Brown Resources"},
 		},
 	}

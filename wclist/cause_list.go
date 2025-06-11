@@ -312,89 +312,90 @@ func (cl *CauseList) extractRowFromPosition(lines []string, startIdx int, matter
 	return nil
 }
 
-// extractObjectionItem extracts an objection item from sequential lines
+// extractObjectionItem extracts an objection item from the text structure
 func (cl *CauseList) extractObjectionItem(lines []string, startIdx int, matterNumber uint64) CauseListItem {
-	// Expected pattern after matter number:
-	// 1. objection number
-	// 2. objector name (may span multiple lines)
-	// 3. tenement number
-	// 4. applicant name (may span multiple lines)
-	// 5. comments (optional)
+	// The text structure from the PDF is:
+	// MATTER_NUMBER OBJECTION_NUMBER OBJECTOR_NAME TENEMENT_NUMBER APPLICANT_NAME
+	// We need to reconstruct this from the fragmented lines
 
-	if startIdx+3 >= len(lines) {
-		return nil
-	}
+	// Collect all content starting from the matter number line until the next matter number
+	var contentLines []string
 
-	currentIdx := startIdx + 1
-
-	// 1. Extract objection number (next line after matter number)
-	objectionNum, err := strconv.ParseUint(lines[currentIdx], 10, 64)
-	if err != nil {
-		return nil // Must have objection number
-	}
-	currentIdx++
-
-	// 2. Extract objector name (may span multiple lines until we hit tenement pattern)
-	var objectorParts []string
-	tenementIdx := -1
-
-	for i := currentIdx; i < len(lines) && i < startIdx+10; i++ {
-		line := lines[i]
-
-		// Check if this is a tenement pattern (like "E 15/2082", "L 15/488", "P 25/2820")
-		if regexp.MustCompile(`^[A-Z]+\s+\d+/\d+`).MatchString(line) {
-			tenementIdx = i
-			break
+	// Start from the current matter number line and collect subsequent lines
+	for i := startIdx; i < len(lines); i++ {
+		line := strings.TrimSpace(lines[i])
+		if line == "" {
+			continue
 		}
 
-		// Stop if we hit another matter number or header
-		if regexp.MustCompile(`^\d+$`).MatchString(line) && len(line) <= 3 {
-			break
+		// Stop if we hit the next matter number (but not the current one)
+		if i > startIdx && regexp.MustCompile(`^\d+$`).MatchString(line) && len(line) <= 3 {
+			// Check if this might be the start of the next record
+			if nextMatter, err := strconv.ParseUint(line, 10, 64); err == nil && nextMatter != matterNumber {
+				break
+			}
 		}
+
+		// Stop if we hit headers
 		if cl.isHeaderLine(line) {
 			break
 		}
 
-		objectorParts = append(objectorParts, line)
+		contentLines = append(contentLines, line)
+
+		// Limit how far we look ahead
+		if i > startIdx+15 {
+			break
+		}
 	}
 
-	if len(objectorParts) == 0 || tenementIdx == -1 {
+	// Join all content and parse as a single string
+	fullContent := strings.Join(contentLines, " ")
+	fmt.Printf("DEBUG: Full content for matter %d: '%s'\n", matterNumber, fullContent)
+
+	// Parse the content using regex to extract structured data
+	return cl.parseObjectionFromContent(fullContent, matterNumber)
+}
+
+// parseObjectionFromContent parses objection data from the combined text content
+func (cl *CauseList) parseObjectionFromContent(content string, matterNumber uint64) CauseListItem {
+	// Expected pattern: MATTER_NUM OBJECTION_NUM OBJECTOR TENEMENT APPLICANT
+	// Use regex to match the pattern
+
+	// Remove the matter number from the beginning
+	content = regexp.MustCompile(`^\d+\s+`).ReplaceAllString(content, "")
+
+	// Extract objection number (first large number)
+	objectionRegex := regexp.MustCompile(`^(\d{6,})\s+`)
+	objectionMatches := objectionRegex.FindStringSubmatch(content)
+	if len(objectionMatches) < 2 {
 		return nil
 	}
 
-	objector := strings.Join(objectorParts, " ")
-	tenement := strings.Split(lines[tenementIdx], " ")[0] + " " + strings.Split(lines[tenementIdx], " ")[1] // Extract just "E 15/2082" part
-
-	// 3. Extract applicant (everything after tenement number on same line or following lines)
-	var applicantParts []string
-
-	// Check if applicant is on same line as tenement
-	tenementLine := lines[tenementIdx]
-	parts := strings.Fields(tenementLine)
-	if len(parts) > 2 {
-		// Applicant starts after tenement number (e.g., "E 15/2082 FMG RESOURCES PTY LTD")
-		applicantParts = append(applicantParts, strings.Join(parts[2:], " "))
+	objectionNum, err := strconv.ParseUint(objectionMatches[1], 10, 64)
+	if err != nil {
+		return nil
 	}
 
-	// Look for additional applicant lines
-	for i := tenementIdx + 1; i < len(lines) && i < startIdx+15; i++ {
-		line := lines[i]
+	// Remove objection number from content
+	content = objectionRegex.ReplaceAllString(content, "")
 
-		// Stop if we hit another matter number, header, or empty line
-		if regexp.MustCompile(`^\d+$`).MatchString(line) && len(line) <= 3 {
-			break
-		}
-		if cl.isHeaderLine(line) || strings.TrimSpace(line) == "" {
-			break
-		}
-		if regexp.MustCompile(`^[A-Z]+\s+\d+/\d+`).MatchString(line) {
-			break
-		}
-
-		applicantParts = append(applicantParts, line)
+	// Find tenement pattern (like "E 15/2082", "L 28/100", etc.)
+	tenementRegex := regexp.MustCompile(`\b([A-Z]+\s+\d+/\d+)\b`)
+	tenementMatches := tenementRegex.FindStringSubmatch(content)
+	if len(tenementMatches) < 2 {
+		return nil
 	}
 
-	applicant := strings.Join(applicantParts, " ")
+	tenement := tenementMatches[1]
+	tenementPos := strings.Index(content, tenement)
+
+	// Everything before the tenement is the objector
+	objector := strings.TrimSpace(content[:tenementPos])
+
+	// Everything after the tenement (and tenement itself) contains the applicant
+	afterTenement := content[tenementPos+len(tenement):]
+	applicant := strings.TrimSpace(afterTenement)
 
 	fmt.Printf("DEBUG: Matter %d, Objection %d, Objector: '%s', Tenement: '%s', Applicant: '%s'\n",
 		matterNumber, objectionNum, objector, tenement, applicant)
@@ -403,7 +404,7 @@ func (cl *CauseList) extractObjectionItem(lines []string, startIdx int, matterNu
 		CLIItems: CLIItems{
 			MatterNumber:   matterNumber,
 			TenementNumber: tenement,
-			Comments:       "", // Comments parsing can be added later
+			Comments:       "",
 		},
 		ObjectionNumber: objectionNum,
 		ObjectorName:    objector,
